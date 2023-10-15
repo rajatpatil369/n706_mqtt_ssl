@@ -6,3 +6,5 @@ cmake_minimum_required(VERSION 3.5)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(n706_mqtt_ssl)
+
+spiffs_create_partition_image(ssl_files ${CMAKE_CURRENT_SOURCE_DIR}/files flash 12K)
