@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -8,6 +9,7 @@
 #include "driver/uart.h"
 #include "esp_log.h"
 #include "esp_spiffs.h"
+#include <errno.h>
 
 #define TXD_PIN (GPIO_NUM_17)
 #define RXD_PIN (GPIO_NUM_16)
@@ -16,115 +18,13 @@
 #define MAX_CLIENT_CERT_SIZE (4*1024)
 #define MAX_CLIENT_KEY_SIZE (3*1024)
 
+char temp[BUF_SIZE];
 
 typedef bool (*RespValiPtr)(char *);
 
-void init(void);
-void send_at_cmd(uint8_t, const char *, char *);
-bool ok_response(char *);
-bool no_error(char *);
-bool module_ready(char *);
-bool query_csq(char *);
-bool query_creg(char *);
-bool creg_def_stat(char *);
-bool query_cgatt(char *);
-bool query_xiic(char *);
-bool query_mqttstate(char *);
-bool add_ca_cert(char *);
-bool add_client_cert(char *);
-bool add_client_key(char *);
-bool query_mqtttls(char *);
-
-void app_main() {
-    init();
-
-    struct {
-        const char *command;
-        RespValiPtr validator;
-        uint8_t retry;
-        int8_t goto_step;
-    } commands_list[] = {
-        {"AT\r", ok_response, 3, 0},
-        {"AT+CGSN\r", ok_response, 1, -1},
-        {"AT+CGMM\r", ok_response, 1, -1},
-        {"AT+CPIN?\r", module_ready, 15, 0},
-        {"AT+CIMI\r", ok_response, 1, -1},
-        {"AT+CSQ\r", query_csq, 40, 0},
-        {"AT+CREG=2\r", ok_response, 1, -1},
-        {"AT+CREG?\r", query_creg, 40, 0},
-        {"AT+CREG=0\r", creg_def_stat, 1, 10},
-        {"AT+CGATT=1\r", ok_response, 1, 0},    // chained commands
-        {"AT+CGATT?\r", query_cgatt, 30, 9},
-        {"AT$MYSYSINFO\r", ok_response, 3, 0},
-        {"AT+CGDCONT=1,\"IP\",\"jionet\"\r", ok_response, 3, 0},   // or `airtelgprs`
-        {"AT+XGAUTH=1,1,\"gsm\",\"1234\"\r", ok_response, 1, -1},   // optional?
-        // module initialization complete
-        {"AT+XIIC=1\r", ok_response, 3, 0},
-        {"AT+XIIC?\r", query_xiic, 30, 14},
-        // PPP link established successfully
-        {"AT+MQTTTLS=sslmode,1", ok_response, 1, -1},
-        {"AT+MQTTTLS=authmode,1", ok_response, 1, -1},
-        {"AT\r", add_ca_cert, 1, -1},
-        {"AT\r", add_client_cert, 1, -1},
-        {"AT\r", add_client_key, 1, -1},
-        {"AT+SSLTCPCFG=cacert,rootca.pem\r", ok_response, 1, -1},
-        {"AT+SSLTCPCFG=clientcert,nwy_all.cert.pem\r", ok_response, 1, -1},
-        {"AT+SSLTCPCFG=clientkey,nwy_all.private.key\r", ok_response, 1, -1},
-        {"AT+MQTTTLS=rootca,rootca.pem\r", ok_response, 1, -1},
-        {"AT+MQTTTLS=clientcert,nwy_all.cert.pem\r", ok_response, 1, -1},
-        {"AT+MQTTTLS=clientkey,nwy_all.private.key\r", ok_response, 1, -1},
-        {"AT+MQTTTLS?\r", query_mqtttls, 1, -1},
-        // MQTTS encryption parameters configured for two-way authentication
-        {"AT+MQTTCONNPARAM=\"007\",\"james_bond\",\"james_bond\"\r", ok_response, 1, 16},
-        {"AT+MQTTWILLPARAM=0,1,\"lastWillAndTestament\",\"Sayonara!\"\r", ok_response, 1, 17},
-        {"AT+MQTTCONN=\"broker.mqtt.cool:1883\",0,60\r", ok_response, 1, 18},   // navigate to `https://testclient-cloud.mqtt.cool/` and connect to `tcp://broker.mqtt.cool:1883` broker
-        {"AT+MQTTSUB=\"rainbow\",1\r", ok_response, 3, 18},
-        {"AT+MQTTPUB=0,1,\"rainbow\",\"Hello! This is Neoway's N706 Cat.1 Module!\"\r", ok_response, 1, 20},
-        {"AT+MQTTSTATE?\r", query_mqttstate, 1, -1},
-        {"AT+MQTTDISCONN\r", ok_response, 1, -1},
-    };  // length = 23
-
-    char resp[BUF_SIZE];
-    
-    uint8_t i = 0;
-    size_t t = sizeof (commands_list) / sizeof (commands_list[0]);
-    while (i < t) {
-        const char *cmd = commands_list[i].command;
-        uint8_t j = 0, retry = commands_list[i].retry;
-        for (; j < retry; ++j) {
-            send_at_cmd(UART_NUM_1, cmd, resp);
-
-            ESP_LOGI("TX", "i=%2u, j=%u | Command: %s", i, j, cmd);
-            // ESP_LOGI("RX", "i=%2u, j=%u | Response: %s", i, j, resp);
-            uint8_t l = strlen(resp);
-            for (int k = 0; k < l; ++k) {
-                switch (resp[k]) {
-                    case '\n':
-                        ESP_LOGI("RX", "%u: \\n", k);
-                        break;
-                    case '\r':
-                        ESP_LOGI("RX", "%u: \\r", k);
-                        break;
-                    default:
-                        ESP_LOGI("RX", "%u: %c", k, resp[k]);
-                }
-            }
-
-            if (commands_list[i].validator(resp)) {
-                break;
-            }
-            vTaskDelay(500 / portTICK_PERIOD_MS);
-        }
-        if (j == retry) {
-            i = commands_list[i].goto_step;
-        } else {
-            ++i;
-        }
-    }
-    uart_driver_delete(UART_NUM_1);
-}
-
 void init() {
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
+
     uart_config_t uart_config = {
         .baud_rate = 115200,
         .data_bits = UART_DATA_8_BITS,
@@ -145,6 +45,28 @@ void init() {
     vTaskDelay(2000 / portTICK_PERIOD_MS);
 }
 
+void deinit() {
+    uart_driver_delete(UART_NUM_1);
+}
+
+void escape_cr_nl(const char *input, char *output) {
+    int m = 0, n = 0;
+    for (; input[m] != '\0'; ++m, ++n) {
+        if (input[m] == '\r') {
+            output[n] = '\\';
+            ++n;
+            output[n] = 'r';
+        } else if (input[m] == '\n') {
+            output[n] = '\\';
+            ++n;
+            output[n] = 'n';
+        } else {
+            output[n] = input[m];
+        }
+    }
+    output[n] = '\0';
+}
+
 void send_at_cmd(uint8_t uart_num, const char *command, char *response_buf) {
     uart_write_bytes(uart_num, command, strlen(command));
     vTaskDelay(1000 / portTICK_PERIOD_MS);  // wait for the command to get send and processed by n706
@@ -159,18 +81,18 @@ bool ok_response(char *response_buf) {
     return (result != NULL);
 }
 
-bool no_error(char *response_buf) {
+bool _error(char *response_buf) {
     char *result = strstr(response_buf, "\r\nERROR\r\n");
-    return (result != NULL);
+    return (result == NULL);
 }
 
 bool module_ready(char *response_buf) {
-    int8_t result = strcmp(response_buf, "\r\n+CPIN: READY\r\nOK\r\n");
+    int8_t result = strcmp(response_buf, "AT+CPIN?\r\r\n+CPIN: READY\r\nOK\r\n");
     return (result == 0);
 }
 
 bool query_csq(char *response_buf) {
-    const char *pattern = "\r\n+CSQ: %u,%*u\r\nOK\r\n";
+    const char *pattern = "AT_CSQ\r\r\n+CSQ: %u,%*u\r\nOK\r\n";
     uint8_t signal;
     uint8_t result = sscanf(response_buf, pattern, &signal);
     if (result == 1) {
@@ -181,7 +103,8 @@ bool query_csq(char *response_buf) {
 }
 
 bool query_creg(char *response_buf) {
-    const char *pattern = "\r\n+CREG: 2,%u\r\nOK\r\n";
+    // "AT+CREG?\r\r\n+CREG: 2,1,"17cc","0e22f26f",7\r\nOK\r\n"
+    const char *pattern = "\r\n+CREG: 2,%u,\"%*x\",\"%*x\",%*u\r\nOK\r\n";
     uint8_t status;
     uint8_t result = sscanf(response_buf, pattern, &status);
     if (result == 1) {
@@ -192,12 +115,31 @@ bool query_creg(char *response_buf) {
 }
 
 bool creg_def_stat(char *response_buf) {
-    return (! ok_response(response_buf));
+    return (!ok_response(response_buf));
 }
 
-bool query_cgatt(char *response_buf) {
-    int8_t result = strcmp(response_buf, "\r\n+CGATT: 1\r\nOK\r\n");    
-    return (result == 0);
+bool cmd_cgatt(char *resp_buf) {
+    const char *cmd = "AT+CGATT=1\r";
+    for (int a = 0; a < 30; ++a) {
+        escape_cr_nl(cmd, temp); ESP_LOGI("RX", "a=%2u | *Command: \"%s\"", a, temp);
+        send_at_cmd(UART_NUM_1, cmd, resp_buf);
+        // AT+CGATT=1\r\r\nOK\r\n
+        escape_cr_nl((const char *) resp_buf, temp); ESP_LOGI("RX", "a=%2u | *Response: \"%s\"", a, temp);
+        if (!ok_response(resp_buf)) {
+            continue;
+        }
+        cmd = "AT+CGATT?\r";
+        for (int b = 0; b < 30; ++b) {
+            escape_cr_nl(cmd, temp); ESP_LOGI("RX", "a=%2u, b=%2u | *Command: \"%s\"", a, b, temp);
+            send_at_cmd(UART_NUM_1, cmd, resp_buf);
+            // AT+CGATT?\r\r\n+CGATT: 1\r\nOK\r\n
+            escape_cr_nl((const char *) resp_buf, temp); ESP_LOGI("RX", "a=%2u, b=%2u | *Response: \"%s\"", a, b, temp);
+            if (strcmp(resp_buf, "\r\n+CGATT: 1\r\nOK\r\n") == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 bool query_xiic(char *response_buf) {
@@ -205,33 +147,63 @@ bool query_xiic(char *response_buf) {
     return (result != NULL);
 }
 
-bool query_mqttstate(char *response_buf) {
-    int8_t result = strcmp(response_buf, "\r\n+MQTTSTATE: 1\r\n\r\nOK\r\n");    
-    return (result == 0);
-}
-
 bool add_ca_cert(char *response_buf) {
-    esp_vfs_spiffs_register(NULL);
+    const char fn[] = "/spiffs/ssl.ca";
+    const char cert_name[] = "rootca.pem";
+    ESP_LOGI("add_client_cert", "Initializing SPIFFS");
+    esp_vfs_spiffs_conf_t conf = {
+      .base_path = "/spiffs",
+      .partition_label = NULL,
+      .max_files = 5,
+      .format_if_mount_failed = false
+    };
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK) {
+        if (ret == ESP_FAIL) {
+            ESP_LOGE("add_client_cert", "Failed to mount or format filesystem");
+        } else if (ret == ESP_ERR_NOT_FOUND) {
+            ESP_LOGE("add_client_cert", "Failed to find SPIFFS partition");
+        } else {
+            ESP_LOGE("add_client_cert", "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
+        }
+        return false;
+    }
 
-    FILE* file_ca_cert = fopen("/spiffs/files/ssl.ca", "r");
-    assert(file_ca_cert == NULL);
+    size_t total = 0, used = 0;
+    ret = esp_spiffs_info(NULL, &total, &used);
+    if (ret != ESP_OK) {
+        ESP_LOGE("add_client_cert", "Failed to get SPIFFS partition information (%s)", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI("add_client_cert", "Partition size: total: %zu, used: %zu", total, used);
+    }
+    
+    ESP_LOGI("add_client_cert", "Reading \"%s\"", fn);
+    FILE* f = fopen(fn, "r");
+    if (f == NULL) {
+        ESP_LOGE("add_client_cert", "Failed to open \"%s\": %s", fn, strerror(errno));
+        return false;
+    }
+    char *buf = (char *)malloc(BUF_SIZE);    
+    uint16_t bytes_read = fread(buf, 1, BUF_SIZE, f);    
+    buf[bytes_read] = '\0';
+    fclose(f);
+    ESP_LOGI("add_client_cert", "Total bytes read from \"%s\": %hu",fn, bytes_read);
+    ESP_LOGI("add_client_cert", "Content of \"%s\":\n%s", fn, buf);
+    // free(buf);
 
-    char ca_cert_buf[MAX_CA_CERT_SIZE];
-    size_t bytes_read = fread(ca_cert_buf, 1, sizeof (ca_cert_buf), file_ca_cert);
+    esp_vfs_spiffs_unregister(NULL);
+    ESP_LOGI("add_client_cert", "All done, unmounted partition and disabled SPIFFS.");
+
 
     char cmd_buf[BUF_SIZE];
-
-    snprintf(cmd_buf, sizeof (cmd_buf), "AT+CERTADD=rootca.pem,%zu\r", bytes_read);
+    snprintf(cmd_buf, sizeof (cmd_buf), "AT+CERTADD=%s,%hu\r", cert_name, bytes_read);
     send_at_cmd(UART_NUM_1, cmd_buf, response_buf);
     int8_t result = strcmp(response_buf, "\r\nCONNECT\r\n");
     
-    uart_write_bytes(UART_NUM_1, ca_cert_buf, strlen(ca_cert_buf));
+    uart_write_bytes(UART_NUM_1, buf, bytes_read);
+    free(buf);
     send_at_cmd(UART_NUM_1, "\r\n", response_buf);
-
-    fclose(file_ca_cert);
     
-    esp_vfs_spiffs_unregister(NULL);
-
     if (result == 0 || !ok_response(response_buf)) {
         return false;
     }
@@ -240,27 +212,62 @@ bool add_ca_cert(char *response_buf) {
 }
 
 bool add_client_cert(char *response_buf) {
-    esp_vfs_spiffs_register(NULL);
+    const char fn[] = "/spiffs/ssl.crt";
+    const char cert_name[] = "nwy_all.cert.pem";
+    ESP_LOGI("add_client_cert", "Initializing SPIFFS");
+    esp_vfs_spiffs_conf_t conf = {
+      .base_path = "/spiffs",
+      .partition_label = NULL,
+      .max_files = 5,
+      .format_if_mount_failed = false
+    };
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK) {
+        if (ret == ESP_FAIL) {
+            ESP_LOGE("add_client_cert", "Failed to mount or format filesystem");
+        } else if (ret == ESP_ERR_NOT_FOUND) {
+            ESP_LOGE("add_client_cert", "Failed to find SPIFFS partition");
+        } else {
+            ESP_LOGE("add_client_cert", "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
+        }
+        return false;
+    }
 
-    FILE* file_client_cert = fopen("/spiffs/files/ssl.crt", "r");
-    assert(file_client_cert == NULL);
+    size_t total = 0, used = 0;
+    ret = esp_spiffs_info(NULL, &total, &used);
+    if (ret != ESP_OK) {
+        ESP_LOGE("add_client_cert", "Failed to get SPIFFS partition information (%s)", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI("add_client_cert", "Partition size: total: %zu, used: %zu", total, used);
+    }
+    
+    ESP_LOGI("add_client_cert", "Reading \"%s\"", fn);
+    FILE* f = fopen(fn, "r");
+    if (f == NULL) {
+        ESP_LOGE("add_client_cert", "Failed to open \"%s\": %s", fn, strerror(errno));
+        return false;
+    }
+    char *buf = (char *)malloc(BUF_SIZE);    
+    uint16_t bytes_read = fread(buf, 1, BUF_SIZE, f);    
+    buf[bytes_read] = '\0';
+    fclose(f);
+    ESP_LOGI("add_client_cert", "Total bytes read from \"%s\": %hu",fn, bytes_read);
+    ESP_LOGI("add_client_cert", "Content of \"%s\":\n%s", fn, buf);
+    // free(buf);
 
-    char client_cert_buf[MAX_CA_CERT_SIZE];
-    size_t bytes_read = fread(client_cert_buf, 1, sizeof (client_cert_buf), file_client_cert);
+    esp_vfs_spiffs_unregister(NULL);
+    ESP_LOGI("add_client_cert", "All done, unmounted partition and disabled SPIFFS.");
+
 
     char cmd_buf[BUF_SIZE];
-
-    snprintf(cmd_buf, sizeof (cmd_buf), "AT+CERTADD=nwy_all.cert.pem,%zu\r", bytes_read);
+    snprintf(cmd_buf, sizeof (cmd_buf), "AT+CERTADD=%s,%hu\r", cert_name, bytes_read);
     send_at_cmd(UART_NUM_1, cmd_buf, response_buf);
     int8_t result = strcmp(response_buf, "\r\nCONNECT\r\n");
     
-    uart_write_bytes(UART_NUM_1, client_cert_buf, strlen(client_cert_buf));
+    uart_write_bytes(UART_NUM_1, buf, bytes_read);
+    free(buf);
     send_at_cmd(UART_NUM_1, "\r\n", response_buf);
-
-    fclose(file_client_cert);
     
-    esp_vfs_spiffs_unregister(NULL);
-
     if (result == 0 || !ok_response(response_buf)) {
         return false;
     }
@@ -269,27 +276,62 @@ bool add_client_cert(char *response_buf) {
 }
 
 bool add_client_key(char *response_buf) {
-    esp_vfs_spiffs_register(NULL);
+    const char fn[] = "/spiffs/ssl.key";
+    const char cert_name[] = "nwy_all.private.key";
+    ESP_LOGI("add_client_cert", "Initializing SPIFFS");
+    esp_vfs_spiffs_conf_t conf = {
+      .base_path = "/spiffs",
+      .partition_label = NULL,
+      .max_files = 5,
+      .format_if_mount_failed = false
+    };
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK) {
+        if (ret == ESP_FAIL) {
+            ESP_LOGE("add_client_cert", "Failed to mount or format filesystem");
+        } else if (ret == ESP_ERR_NOT_FOUND) {
+            ESP_LOGE("add_client_cert", "Failed to find SPIFFS partition");
+        } else {
+            ESP_LOGE("add_client_cert", "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
+        }
+        return false;
+    }
 
-    FILE* file_client_key = fopen("/spiffs/files/ssl.key", "r");
-    assert(file_client_key == NULL);
+    size_t total = 0, used = 0;
+    ret = esp_spiffs_info(NULL, &total, &used);
+    if (ret != ESP_OK) {
+        ESP_LOGE("add_client_cert", "Failed to get SPIFFS partition information (%s)", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI("add_client_cert", "Partition size: total: %zu, used: %zu", total, used);
+    }
+    
+    ESP_LOGI("add_client_cert", "Reading \"%s\"", fn);
+    FILE* f = fopen(fn, "r");
+    if (f == NULL) {
+        ESP_LOGE("add_client_cert", "Failed to open \"%s\": %s", fn, strerror(errno));
+        return false;
+    }
+    char *buf = (char *)malloc(BUF_SIZE);    
+    uint16_t bytes_read = fread(buf, 1, BUF_SIZE, f);    
+    buf[bytes_read] = '\0';
+    fclose(f);
+    ESP_LOGI("add_client_cert", "Total bytes read from \"%s\": %hu",fn, bytes_read);
+    ESP_LOGI("add_client_cert", "Content of \"%s\":\n%s", fn, buf);
+    // free(buf);
 
-    char client_key_buf[MAX_CA_CERT_SIZE];
-    size_t bytes_read = fread(client_key_buf, 1, sizeof (client_key_buf), file_client_key);
+    esp_vfs_spiffs_unregister(NULL);
+    ESP_LOGI("add_client_cert", "All done, unmounted partition and disabled SPIFFS.");
+
 
     char cmd_buf[BUF_SIZE];
-
-    snprintf(cmd_buf, sizeof (cmd_buf), "AT+CERTADD=nwy_all.private.key,%zu\r", bytes_read);
+    snprintf(cmd_buf, sizeof (cmd_buf), "AT+CERTADD=%s,%hu\r", cert_name, bytes_read);
     send_at_cmd(UART_NUM_1, cmd_buf, response_buf);
     int8_t result = strcmp(response_buf, "\r\nCONNECT\r\n");
     
-    uart_write_bytes(UART_NUM_1, client_key_buf, strlen(client_key_buf));
+    uart_write_bytes(UART_NUM_1, buf, bytes_read);
+    free(buf);
     send_at_cmd(UART_NUM_1, "\r\n", response_buf);
-
-    fclose(file_client_key);
     
-    esp_vfs_spiffs_unregister(NULL);
-
     if (result == 0 || !ok_response(response_buf)) {
         return false;
     }
@@ -301,4 +343,117 @@ bool query_mqtttls(char *response_buf) {
     int8_t result = strcmp(response_buf, "\r\n+MQTTTLS: 1,1,rootca.pem,nwy_all.cert.pem,nwy_all.private.key\r\nOK\r\n");    
     return (result == 0);
 
+}
+
+bool query_mqttstate(char *response_buf) {
+    int8_t result = strcmp(response_buf, "\r\n+MQTTSTATE: 1\r\n\r\nOK\r\n");    
+    return (result == 0);
+}
+
+void app_main() {
+    init();
+
+    struct {
+        const char *command;
+        RespValiPtr validator;
+        uint8_t retry;
+        int8_t goto_step;
+    } commands_list[] = {   // a="""<logs>"""; ''.join([l.split("'")[1] for l in a.split('I (') if len(l)>0])
+        {"AT\r", ok_response, 3, 0},
+        // AT\r\r\nOK\r\n
+        {"AT+CGSN\r", ok_response, 1, -1},
+        // AT+CGSN\r\r\n+CGSN: 862140060226843\r\nOK\r\n                        
+        {"AT+CGMM\r", ok_response, 1, -1},
+        // AT+CGMM\r\r\n+CGMM: N706\r\nOK\r\n
+        {"AT+CPIN?\r", module_ready, 15, 0},
+        // AT+CPIN?\r\r\n+CPIN: READY\r\nOK\r\n
+        {"AT+CIMI\r", ok_response, 1, -1},
+        // AT+CIMI\r\r\n+CIMI: 405864140242618\r\nOK\r\n
+        {"AT+CSQ\r", query_csq, 40, 0},
+        // AT+CSQ\r\r\n+CSQ: 16,99\r\nOK\r\n
+        {"AT+CREG=2\r", ok_response, 1, -1},
+        // AT+CREG=2\r\r\nOK\r\n
+        {"AT+CREG?\r", query_creg, 40, 0},
+        // AT+CREG?\r\r\n+CREG: 2,1,"17cc","0e22f265",7\r\nOK\r\n
+        {"AT+CREG=0\r", creg_def_stat, 1, -1},
+        // AT+CREG=0\r\r\nOK\r\n
+        {"*", cmd_cgatt, 1, 0},
+        {"AT$MYSYSINFO\r", ok_response, 3, 0},
+        // AT$MYSYSINFO\r\r\n$MYSYSINFO: 4,4\r\nOK\r\n
+        {"AT+CGDCONT=1,\"IP\",\"jionet\"\r", ok_response, 3, 0},   // or `airtelgprs`
+        // AT+CGDCONT=1,"IP","AIRTELGPRS"\r\r\nOK\r\n
+        {"AT+XGAUTH=1,1,\"gsm\",\"1234\"\r", ok_response, 1, -1},   // optional?
+        // AT+XGAUTH=1,1,"gsm","1234"\r\r\nOK\r\n
+    // module initialization complete
+        {"AT+XIIC=1\r", ok_response, 3, 0},
+        // AT+XIIC=1\r\r\nOK\r\n
+        {"AT+XIIC?\r", query_xiic, 30, 13},
+        // AT+XIIC?\r\r\n+XIIC:    1,100.66.152.54\r\n+XIIC:    1,2401:4900:7971:4C79::C36:A899\r\nOK\r\n
+    // PPP link established successfully
+        {"AT+MQTTTLS=sslmode,1", ok_response, 1, -1},
+        // AT+MQTTTLS=sslmode,1     ...kuch toh garbad hai dayaa
+        {"AT+MQTTTLS=authmode,1", ok_response, 1, -1},
+        // AT+MQTTTLS=authmode,1    ...kuch toh garbad hai dayaa
+        {"AT\r", add_ca_cert, 1, -1},
+        {"AT\r", add_client_cert, 1, -1},
+        {"AT\r", add_client_key, 1, -1},
+        {"AT+SSLTCPCFG=cacert,rootca.pem\r", ok_response, 1, -1},
+        // AT+SSLTCPCFG=cacert,rootca.pem\r\r\nOK\r\n
+        {"AT+SSLTCPCFG=clientcert,nwy_all.cert.pem\r", ok_response, 1, -1},
+        // AT+SSLTCPCFG=clientcert,nwy_all.cert.pem\r\r\nOK\r\n
+        {"AT+SSLTCPCFG=clientkey,nwy_all.private.key\r", ok_response, 1, -1},
+        // AT+SSLTCPCFG=clientkey,nwy_all.private.key\r\r\nOK\r\n
+        {"AT+MQTTTLS=rootca,rootca.pem\r", ok_response, 1, -1},
+        // AT+MQTTTLS=rootca,rootca.pem\r\r\nOK\r\n
+        {"AT+MQTTTLS=clientcert,nwy_all.cert.pem\r", ok_response, 1, -1},
+        // AT+MQTTTLS=clientcert,nwy_all.cert.pem\r\r\nOK\r\n
+        {"AT+MQTTTLS=clientkey,nwy_all.private.key\r", ok_response, 1, -1},
+        // AT+MQTTTLS=clientkey,nwy_all.private.key\r\r\nOK\r\n
+        {"AT+MQTTTLS?\r", query_mqtttls, 1, -1},
+        // AT+MQTTTLS?\r\r\n+MQTTTLS:0,0,rootca.pem,nwy_all.cert.pem,nwy_all.private.key,3\r\nOK\r\n
+    // MQTTS encryption parameters configured for two-way authentication
+        {"AT+MQTTCONNPARAM=\"007\",\"james_bond\",\"james_bond\"\r", ok_response, 1, 15},
+        // AT+MQTTCONNPARAM="007","james_bond","james_bond"\r\r\nOK\r\n
+        {"AT+MQTTWILLPARAM=0,1,\"lastWillAndTestament\",\"Sayonara!\"\r", ok_response, 1, 16},
+        // AT+MQTTWILLPARAM=0,1,"lastWillAndTestament","Sayonara!"\r\r\nOK\r\n
+        {"AT+MQTTCONN=\"broker.mqtt.cool:1883\",0,60\r", ok_response, 1, 17},   // navigate to `https://testclient-cloud.mqtt.cool/` and connect to `tcp://broker.mqtt.cool:1883` broker
+        // AT+MQTTCONN="broker.mqtt.cool:1883",0,60\r\r\nOK\r\n
+        {"AT+MQTTSUB=\"rainbow\",1\r", ok_response, 3, 17},
+        // AT+MQTTSUB="rainbow",1\r\r\nOK\r\n
+        {"AT+MQTTPUB=0,1,\"rainbow\",\"Hello! This is Neoway's N706 Cat.1 Module!\"\r", ok_response, 1, 19},
+        // AT+MQTTPUB=0,1,"rainbow","Hello! This is Neoway's N706 Cat.1 Module!"\r\r\nOK\r\n\r\n+MQTTSUB:3,"rainbow",42,Hello! This is Neoway's N706 Cat.1 Module!\r\n
+        {"AT+MQTTSTATE?\r", query_mqttstate, 1, -1},
+        // AT+MQTTSTATE?\r\r\n+MQTTSTATE: 1\r\n\r\nOK\r\n
+        {"AT+MQTTDISCONN\r", ok_response, 1, -1},
+        // AT+MQTTDISCONN\r\r\nOK\r\n
+    };
+
+    char resp[BUF_SIZE];
+    
+    uint8_t i = 0;
+    size_t t = sizeof (commands_list) / sizeof (commands_list[0]);
+    while (i < t) {
+        const char *cmd = commands_list[i].command;
+        uint8_t j = 0, retry = commands_list[i].retry;
+        for (; j < retry; ++j) {
+            escape_cr_nl(cmd, temp); ESP_LOGI("TX", "i=%2u, j=%2u | Command: \"%s\"", i, j, temp);
+            if (strcmp(cmd, "*") != 0) {
+                send_at_cmd(UART_NUM_1, cmd, resp);
+                escape_cr_nl((const char *) resp, temp); ESP_LOGI("RX", "i=%2u, j=%2u | Response: \"%s\"", i, j, temp);
+            } else {
+                ESP_LOGI("RX", "i=%2u, j=%2u | Chained Commands:", i, j);
+            }
+            if (commands_list[i].validator(resp)) {
+                break;
+            }
+            vTaskDelay(500 / portTICK_PERIOD_MS);
+        }
+        if (j == retry) {
+            i = commands_list[i].goto_step;
+        } else {
+            ++i;
+        }
+    }
+    
+    deinit();
 }
