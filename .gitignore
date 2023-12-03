@@ -1,7 +1,1 @@
 build/
-sdkconfig
-sdkconfig.old
-
-.cache/
-sub-projects/
-docs/

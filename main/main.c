@@ -147,10 +147,8 @@ bool query_xiic(char *response_buf) {
     return (result != NULL);
 }
 
-bool add_ca_cert(char *response_buf) {
-    const char fn[] = "/spiffs/ssl.ca";
-    const char cert_name[] = "rootca.pem";
-    ESP_LOGI("add_client_cert", "Initializing SPIFFS");
+bool _add_cert(const char *file_path, const char *cert_name, const char *log_tag, uint16_t cert_buf_size, char *response_buf) {
+    ESP_LOGI(log_tag, "Initializing SPIFFS");
     esp_vfs_spiffs_conf_t conf = {
       .base_path = "/spiffs",
       .partition_label = NULL,
@@ -160,11 +158,11 @@ bool add_ca_cert(char *response_buf) {
     esp_err_t ret = esp_vfs_spiffs_register(&conf);
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
-            ESP_LOGE("add_client_cert", "Failed to mount or format filesystem");
+            ESP_LOGE(log_tag, "Failed to mount or format filesystem");
         } else if (ret == ESP_ERR_NOT_FOUND) {
-            ESP_LOGE("add_client_cert", "Failed to find SPIFFS partition");
+            ESP_LOGE(log_tag, "Failed to find SPIFFS partition");
         } else {
-            ESP_LOGE("add_client_cert", "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
+            ESP_LOGE(log_tag, "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
         }
         return false;
     }
@@ -172,27 +170,26 @@ bool add_ca_cert(char *response_buf) {
     size_t total = 0, used = 0;
     ret = esp_spiffs_info(NULL, &total, &used);
     if (ret != ESP_OK) {
-        ESP_LOGE("add_client_cert", "Failed to get SPIFFS partition information (%s)", esp_err_to_name(ret));
+        ESP_LOGE(log_tag, "Failed to get SPIFFS partition information (%s)", esp_err_to_name(ret));
     } else {
-        ESP_LOGI("add_client_cert", "Partition size: total: %zu, used: %zu", total, used);
+        ESP_LOGI(log_tag, "Partition size: total: %zu, used: %zu", total, used);
     }
     
-    ESP_LOGI("add_client_cert", "Reading \"%s\"", fn);
-    FILE* f = fopen(fn, "r");
+    ESP_LOGI(log_tag, "Reading \"%s\"", file_path);
+    FILE* f = fopen(file_path, "r");
     if (f == NULL) {
-        ESP_LOGE("add_client_cert", "Failed to open \"%s\": %s", fn, strerror(errno));
+        ESP_LOGE(log_tag, "Failed to open \"%s\": %s", file_path, strerror(errno));
         return false;
     }
-    char *buf = (char *)malloc(BUF_SIZE);    
-    uint16_t bytes_read = fread(buf, 1, BUF_SIZE, f);    
-    buf[bytes_read] = '\0';
+    char *cert_buf = (char *)malloc(cert_buf_size);    
+    uint16_t bytes_read = fread(cert_buf, 1, cert_buf_size, f);    
+    cert_buf[bytes_read] = '\0';
     fclose(f);
-    ESP_LOGI("add_client_cert", "Total bytes read from \"%s\": %hu",fn, bytes_read);
-    ESP_LOGI("add_client_cert", "Content of \"%s\":\n%s", fn, buf);
-    // free(buf);
+    ESP_LOGI(log_tag, "Total bytes read from \"%s\": %hu",file_path, bytes_read);
+    ESP_LOGI(log_tag, "Content of \"%s\":\n%s", file_path, cert_buf);
 
     esp_vfs_spiffs_unregister(NULL);
-    ESP_LOGI("add_client_cert", "All done, unmounted partition and disabled SPIFFS.");
+    ESP_LOGI(log_tag, "All done, unmounted partition and disabled SPIFFS.");
 
 
     char cmd_buf[BUF_SIZE];
@@ -200,8 +197,8 @@ bool add_ca_cert(char *response_buf) {
     send_at_cmd(UART_NUM_1, cmd_buf, response_buf);
     int8_t result = strcmp(response_buf, "\r\nCONNECT\r\n");
     
-    uart_write_bytes(UART_NUM_1, buf, bytes_read);
-    free(buf);
+    uart_write_bytes(UART_NUM_1, cert_buf, bytes_read);
+    free(cert_buf);
     send_at_cmd(UART_NUM_1, "\r\n", response_buf);
     
     if (result == 0 || !ok_response(response_buf)) {
@@ -209,140 +206,23 @@ bool add_ca_cert(char *response_buf) {
     }
 
     return true;
+}
+
+bool add_ca_cert(char *response_buf) {
+    return _add_cert("/spiffs/ssl.ca", "rootca.pem", "add_ca_cert", MAX_CA_CERT_SIZE, response_buf);
 }
 
 bool add_client_cert(char *response_buf) {
-    const char fn[] = "/spiffs/ssl.crt";
-    const char cert_name[] = "nwy_all.cert.pem";
-    ESP_LOGI("add_client_cert", "Initializing SPIFFS");
-    esp_vfs_spiffs_conf_t conf = {
-      .base_path = "/spiffs",
-      .partition_label = NULL,
-      .max_files = 5,
-      .format_if_mount_failed = false
-    };
-    esp_err_t ret = esp_vfs_spiffs_register(&conf);
-    if (ret != ESP_OK) {
-        if (ret == ESP_FAIL) {
-            ESP_LOGE("add_client_cert", "Failed to mount or format filesystem");
-        } else if (ret == ESP_ERR_NOT_FOUND) {
-            ESP_LOGE("add_client_cert", "Failed to find SPIFFS partition");
-        } else {
-            ESP_LOGE("add_client_cert", "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
-        }
-        return false;
-    }
-
-    size_t total = 0, used = 0;
-    ret = esp_spiffs_info(NULL, &total, &used);
-    if (ret != ESP_OK) {
-        ESP_LOGE("add_client_cert", "Failed to get SPIFFS partition information (%s)", esp_err_to_name(ret));
-    } else {
-        ESP_LOGI("add_client_cert", "Partition size: total: %zu, used: %zu", total, used);
-    }
-    
-    ESP_LOGI("add_client_cert", "Reading \"%s\"", fn);
-    FILE* f = fopen(fn, "r");
-    if (f == NULL) {
-        ESP_LOGE("add_client_cert", "Failed to open \"%s\": %s", fn, strerror(errno));
-        return false;
-    }
-    char *buf = (char *)malloc(BUF_SIZE);    
-    uint16_t bytes_read = fread(buf, 1, BUF_SIZE, f);    
-    buf[bytes_read] = '\0';
-    fclose(f);
-    ESP_LOGI("add_client_cert", "Total bytes read from \"%s\": %hu",fn, bytes_read);
-    ESP_LOGI("add_client_cert", "Content of \"%s\":\n%s", fn, buf);
-    // free(buf);
-
-    esp_vfs_spiffs_unregister(NULL);
-    ESP_LOGI("add_client_cert", "All done, unmounted partition and disabled SPIFFS.");
-
-
-    char cmd_buf[BUF_SIZE];
-    snprintf(cmd_buf, sizeof (cmd_buf), "AT+CERTADD=%s,%hu\r", cert_name, bytes_read);
-    send_at_cmd(UART_NUM_1, cmd_buf, response_buf);
-    int8_t result = strcmp(response_buf, "\r\nCONNECT\r\n");
-    
-    uart_write_bytes(UART_NUM_1, buf, bytes_read);
-    free(buf);
-    send_at_cmd(UART_NUM_1, "\r\n", response_buf);
-    
-    if (result == 0 || !ok_response(response_buf)) {
-        return false;
-    }
-
-    return true;
+    return _add_cert("/spiffs/ssl.crt", "nwy_all.cert.pem", "add_client_cert", MAX_CLIENT_CERT_SIZE, response_buf);    
 }
 
 bool add_client_key(char *response_buf) {
-    const char fn[] = "/spiffs/ssl.key";
-    const char cert_name[] = "nwy_all.private.key";
-    ESP_LOGI("add_client_cert", "Initializing SPIFFS");
-    esp_vfs_spiffs_conf_t conf = {
-      .base_path = "/spiffs",
-      .partition_label = NULL,
-      .max_files = 5,
-      .format_if_mount_failed = false
-    };
-    esp_err_t ret = esp_vfs_spiffs_register(&conf);
-    if (ret != ESP_OK) {
-        if (ret == ESP_FAIL) {
-            ESP_LOGE("add_client_cert", "Failed to mount or format filesystem");
-        } else if (ret == ESP_ERR_NOT_FOUND) {
-            ESP_LOGE("add_client_cert", "Failed to find SPIFFS partition");
-        } else {
-            ESP_LOGE("add_client_cert", "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
-        }
-        return false;
-    }
-
-    size_t total = 0, used = 0;
-    ret = esp_spiffs_info(NULL, &total, &used);
-    if (ret != ESP_OK) {
-        ESP_LOGE("add_client_cert", "Failed to get SPIFFS partition information (%s)", esp_err_to_name(ret));
-    } else {
-        ESP_LOGI("add_client_cert", "Partition size: total: %zu, used: %zu", total, used);
-    }
-    
-    ESP_LOGI("add_client_cert", "Reading \"%s\"", fn);
-    FILE* f = fopen(fn, "r");
-    if (f == NULL) {
-        ESP_LOGE("add_client_cert", "Failed to open \"%s\": %s", fn, strerror(errno));
-        return false;
-    }
-    char *buf = (char *)malloc(BUF_SIZE);    
-    uint16_t bytes_read = fread(buf, 1, BUF_SIZE, f);    
-    buf[bytes_read] = '\0';
-    fclose(f);
-    ESP_LOGI("add_client_cert", "Total bytes read from \"%s\": %hu",fn, bytes_read);
-    ESP_LOGI("add_client_cert", "Content of \"%s\":\n%s", fn, buf);
-    // free(buf);
-
-    esp_vfs_spiffs_unregister(NULL);
-    ESP_LOGI("add_client_cert", "All done, unmounted partition and disabled SPIFFS.");
-
-
-    char cmd_buf[BUF_SIZE];
-    snprintf(cmd_buf, sizeof (cmd_buf), "AT+CERTADD=%s,%hu\r", cert_name, bytes_read);
-    send_at_cmd(UART_NUM_1, cmd_buf, response_buf);
-    int8_t result = strcmp(response_buf, "\r\nCONNECT\r\n");
-    
-    uart_write_bytes(UART_NUM_1, buf, bytes_read);
-    free(buf);
-    send_at_cmd(UART_NUM_1, "\r\n", response_buf);
-    
-    if (result == 0 || !ok_response(response_buf)) {
-        return false;
-    }
-
-    return true;
+    return _add_cert("/spiffs/ssl.key", "nwy_all.private.key", "add_client_key", MAX_CLIENT_KEY_SIZE, response_buf);    
 }
 
 bool query_mqtttls(char *response_buf) {
     int8_t result = strcmp(response_buf, "\r\n+MQTTTLS: 1,1,rootca.pem,nwy_all.cert.pem,nwy_all.private.key\r\nOK\r\n");    
     return (result == 0);
-
 }
 
 bool query_mqttstate(char *response_buf) {

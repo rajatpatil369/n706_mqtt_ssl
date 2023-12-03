@@ -1,32 +1,24 @@
-# _Sample project_
-
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
-
-This is the simplest buildable example. The example is used by command `idf.py create-project`
-that copies the project to user specified path and set it's name. For more information follow the [docs page](https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html#start-a-new-project)
+# ESP32 Neoway N706 MQTT Communication with SSL/TLS
 
 
+## Overview
 
-## How to use example
-We encourage the users to use the example as a template for the new projects.
-A recommended way is to follow the instructions on a [docs page](https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html#start-a-new-project).
+This project involves the integration of an ESP32 microcontroller with the Neoway N706 module to establish secure MQTT communication using SSL/TLS certificates. The Neoway N706 module is used for GSM communication, while the ESP32 acts as the main controller, sending AT commands to the Neoway module and facilitating MQTT communication for secure data transfer.
 
-## Example folder contents
 
-The project **sample_project** contains one source file in C language [main.c](main/main.c). The file is located in folder [main](main).
+## License
 
-ESP-IDF projects are built using CMake. The project build configuration is contained in `CMakeLists.txt`
-files that provide set of directives and instructions describing the project's source files and targets
-(executable, library, or both). 
+This project is copyrighted. The usage of this project, including modification and redistribution, is governed by the following terms and conditions:
 
-Below is short explanation of remaining files in the project folder.
+1. **Personal Use:** You are permitted to use this project for personal purposes only.
 
-```
-├── CMakeLists.txt
-├── main
-│   ├── CMakeLists.txt
-│   └── main.c
-└── README.md                  This is the file you are currently reading
-```
-Additionally, the sample project contains Makefile and component.mk files, used for the legacy Make based build system. 
-They are not used or needed when building with CMake and idf.py.
+2. **Non-Commercial Use:** Usage of this project for commercial or business purposes, including modification and redistribution for such purposes, is strictly prohibited without a prior written consent of the author  of this repository.
+
+3. **Modification:** You may modify the project for your own personal use, but modified versions cannot be distributed for commercial or business purposes without consulting the author of this repository.
+
+4. **Redistribution:** Redistribution of the original or modified project for commercial or business purposes is not allowed without explicit permission of the author of this repository.
+
+For further queries and details, please contact:
+
+Rajat Patil (Author)
+Mail: rajatpatil369@gmail.com
