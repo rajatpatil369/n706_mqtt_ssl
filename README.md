@@ -3,7 +3,8 @@
 
 ## Overview
 
-This project involves the integration of an ESP32 microcontroller with the Neoway N706 module to establish secure MQTT communication using SSL/TLS certificates. The Neoway N706 module is used for GSM communication, while the ESP32 acts as the main controller, sending AT commands to the Neoway module and facilitating MQTT communication for secure data transfer.
+This project involves the integration of an ESP32 (ESP-WROOM-32) with the Neoway N706 module to establish secure MQTT communication using SSL/TLS certificates. The Neoway N706 module is used for GSM communication, while the ESP32 acts as the main controller, sending AT commands to the Neoway module and facilitating MQTT communication for secure data transfer.
+The code base for this project is developed using Espressif's official ESP-IDF (Espressif IoT Development Framework).
 
 
 ## License
