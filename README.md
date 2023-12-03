@@ -19,5 +19,7 @@ This project is copyrighted. The usage of this project, including modification a
 
 4. **Redistribution:** Redistribution of the original or modified project for commercial or business purposes is not allowed without explicit permission of the author of this repository.
 
-For further queries and details, please contact:
-Rajat Patil (Author), Mail: rajatpatil369@gmail.com
+
+For further queries and details, please contact:<br>
+Rajat Patil (Author)<br>
+Mail: rajatpatil369@gmail.com
